@@ -9,6 +9,7 @@ use std::{
     thread,
     time::Instant,
 };
+use threadpool::ThreadPool;
 
 use nannou::{
     image::{DynamicImage, ImageBuffer, Luma},
@@ -93,32 +94,26 @@ fn metropolis_step_atomic(lattice: &mut Array2<AtomicI8>, beta: f64) {
     }
 }
 
-fn metropolis_step(lattice: &mut Array2<i8>, beta: f64) {
-    let n = lattice.shape()[0];
-    let m = lattice.shape()[1];
-    let threads = std::thread::available_parallelism().unwrap().get();
-    let mut pool = Vec::with_capacity(threads);
-    for _ in 0..threads - 1 {
-        let data_ptr = ptr::Unique::new(lattice.as_mut_ptr());
-        pool.push(spawn(move || unsafe {
-            let latt = data_ptr.unwrap().as_ptr();
-            let x_values = repeat_with(|| fastrand::Rng::new().usize(0..n));
-            let y_values = repeat_with(|| fastrand::Rng::new().usize(0..n));
-            let r_values = repeat_with(|| fastrand::Rng::new().f64());
-            for (x, y, r) in izip!(x_values, y_values, r_values).take(m * n) {
-                let curr = latt.add(x + (m * y));
-                let right = latt.add(((x + 1) % n) + (m * y));
-                let down = latt.add(x + (m * ((y + 1) % m)));
-                let left = latt.add((x.saturating_sub(1) % n) + (m * y));
-                let up = latt.add(x + (m * (y.saturating_sub(1) % m)));
-                let neighbors_sum = *right + *down + *left + *up;
-                let delta_e = (2 * *curr * neighbors_sum) as f64;
-                if delta_e < 0_f64 || r < (-beta * delta_e).exp() {
-                    atomic_xchg_acqrel(curr, *curr * -1);
-                }
+fn metropolis_step(latt: *mut i8, beta: f64) {
+    let n = N;
+    let m = N;
+    unsafe {
+        let x_values = repeat_with(|| fastrand::Rng::new().usize(0..n));
+        let y_values = repeat_with(|| fastrand::Rng::new().usize(0..n));
+        let r_values = repeat_with(|| fastrand::Rng::new().f64());
+        for (x, y, r) in izip!(x_values, y_values, r_values).take(m * n) {
+            let curr = latt.add(x + (m * y));
+            let right = latt.add(((x + 1) % n) + (m * y));
+            let down = latt.add(x + (m * ((y + 1) % m)));
+            let left = latt.add((x.saturating_sub(1) % n) + (m * y));
+            let up = latt.add(x + (m * (y.saturating_sub(1) % m)));
+            let neighbors_sum = *right + *down + *left + *up;
+            let delta_e = (2 * *curr * neighbors_sum) as f64;
+            if delta_e < 0_f64 || r < (-beta * delta_e).exp() {
+                atomic_xchg_acqrel(curr, *curr * -1);
             }
-        }))
-    }
+        }
+    };
 }
 
 fn main() {
@@ -126,11 +121,13 @@ fn main() {
 }
 
 struct Model {
+    pool: ThreadPool,
     lattice: Array2<i8>,
 }
 
 fn model(_app: &App) -> Model {
     Model {
+        pool: ThreadPool::new(std::thread::available_parallelism().unwrap().get()),
         lattice: initialize_spin_lattice((N, N)),
     }
 }
@@ -138,7 +135,11 @@ fn model(_app: &App) -> Model {
 fn update(_app: &App, _model: &mut Model, _update: Update) {
     let beta = (_app.mouse.x as f64 + ((N / 2) as f64)) / ((N / 2) as f64);
     let start = Instant::now();
-    metropolis_step(&mut _model.lattice, beta);
+    let data_ptr = ptr::Unique::new(_model.lattice.as_mut_ptr());
+    _model
+        .pool
+        .execute(move || metropolis_step(data_ptr.unwrap().as_ptr(), beta));
+
     let duration = start.elapsed();
     print!("\rTime elapsed in iteration is: {:?}", duration);
 }
