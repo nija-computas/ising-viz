@@ -1,5 +1,4 @@
 use std::iter::repeat_with;
-use std::time::Instant;
 use threadpool::ThreadPool;
 
 use nannou::{
@@ -7,14 +6,14 @@ use nannou::{
     prelude::*,
 };
 
-use rand::distributions::{Distribution, Uniform};
+use rand::distributions::Uniform;
 
 use ndarray::Array2;
 use ndarray_rand::RandomExt;
 
 use itertools::izip;
 
-const N: usize = 1000;
+const N: usize = 2000;
 
 fn initialize_spin_lattice(dim: (usize, usize)) -> Array2<i8> {
     Array2::random(dim, Uniform::new(0., 1.)).mapv(|a| if a > 0.5 { 1 } else { -1 })
@@ -66,15 +65,18 @@ fn model(_app: &App) -> Model {
 }
 
 fn update(_app: &App, _model: &mut Model, _update: Update) {
+    if _model.pool.queued_count() > 10 {
+        return;
+    }
     let beta = (_app.mouse.x as f64 + ((N / 2) as f64)) / ((N / 2) as f64);
-    let start = Instant::now();
+    //let start = Instant::now();
     let data_ptr = HoldsRawPtr {
         ptr: (_model.lattice.as_mut_ptr()),
     };
     _model.pool.execute(move || metropolis_step(data_ptr, beta));
 
-    let duration = start.elapsed();
-    print!("\rTime elapsed in iteration is: {:?}", duration);
+    //let duration = start.elapsed();
+    //print!("\rTime elapsed in iteration is: {:?}", duration);
 }
 
 fn view(_app: &App, _model: &Model, frame: Frame) {
